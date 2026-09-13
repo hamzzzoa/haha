@@ -1,0 +1,276 @@
+--[[
+    ═══════════════════════════════════════════════════════
+    🎯 TWIST OF FATE - AIMLOCK SURVIVOR VERSION
+    ═══════════════════════════════════════════════════════
+    Features:
+    ✓ VEIL Default + Auto Height (aim ke kepala)
+    ✓ Divider (adjust kalau aim kurang sempurna)
+    ✓ FOV Circle (biar tau area lock)
+    ✓ Hold Button GUI (tekan = auto aim ke target)
+    ✓ Aim Prediction (buat killer yang jalan kesamping)
+    
+    ⚠️ NB: Jangan spam tembak! System game 60/40
+       (40% hit malah kena diri sendiri)
+    
+    Credits: THANKS TO OUR ADMIN
+    ═══════════════════════════════════════════════════════
+--]]
+
+-- ═══════════ SERVICES ═══════════
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local Workspace         = game:GetService("Workspace")
+local Camera            = Workspace.CurrentCamera
+
+local LP     = Players.LocalPlayer
+local Mouse  = LP:GetMouse()
+
+-- ═══════════ CONFIG ═══════════
+local Config = {
+    -- VEIL Settings
+    AutoHeight      = true,     -- default aktif (aim ke kepala)
+    Divider         = 1.0,      -- ubah ke 0.5 / 1.5 kalau aim kurang pas
+    
+    -- FOV Circle
+    ShowFOV         = true,
+    FOVRadius       = 150,
+    FOVColor        = Color3.fromRGB(0, 255, 120),
+    
+    -- Aimlock
+    LockKey         = Enum.UserInputType.MouseButton2, -- klik kanan
+    Smoothness      = 0.30,     -- 0.1 = halus, 1 = instan
+    
+    -- Aim Prediction
+    AimPredict      = false,
+    PredictStrength = 0.15,
+    
+    -- Filter
+    TeamCheck       = true,
+    IgnoreDead      = true,
+}
+
+-- ═══════════ BUILD GUI ═══════════
+local function buildGUI()
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "ToF_Aimlock_Survivor"
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.Parent = LP:WaitForChild("PlayerGui")
+
+    -- FOV Circle
+    local fov = Instance.new("Frame")
+    fov.Name = "FOVCircle"
+    fov.AnchorPoint = Vector2.new(0.5, 0.5)
+    fov.Position = UDim2.new(0.5, 0, 0.5, 0)
+    fov.Size = UDim2.new(0, Config.FOVRadius * 2, 0, Config.FOVRadius * 2)
+    fov.BackgroundTransparency = 1
+    fov.Parent = sg
+
+    Instance.new("UICorner", fov).CornerRadius = UDim.new(1, 0)
+    local stroke = Instance.new("UIStroke", fov)
+    stroke.Color = Config.FOVColor
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.35
+
+    -- Hold Button
+    local btn = Instance.new("TextButton")
+    btn.Name = "HoldBtn"
+    btn.AnchorPoint = Vector2.new(1, 0.5)
+    btn.Position = UDim2.new(1, -30, 0.5, 0)
+    btn.Size = UDim2.new(0, 130, 0, 130)
+    btn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 15
+    btn.Text = "🎯 HOLD\nAIM LOCK"
+    btn.AutoButtonColor = false
+    btn.Active = true
+    btn.Parent = sg
+
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    local bstroke = Instance.new("UIStroke", btn)
+    bstroke.Color = Config.FOVColor
+    bstroke.Thickness = 2
+    bstroke.Parent = btn
+
+    return sg, fov, btn, stroke, bstroke
+end
+
+local ScreenGui, FOVFrame, HoldBtn, FOVStroke, BtnStroke = buildGUI()
+
+-- ═══════════ BUTTON STATE ═══════════
+local isHolding = false
+
+HoldBtn.MouseButton1Down:Connect(function()
+    isHolding = true
+    HoldBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+    HoldBtn.Text = "🎯 LOCKING..."
+end)
+
+HoldBtn.MouseButton1Up:Connect(function()
+    isHolding = false
+    HoldBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    HoldBtn.Text = "🎯 HOLD\nAIM LOCK"
+end)
+
+HoldBtn.MouseLeave:Connect(function()
+    isHolding = false
+    HoldBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    HoldBtn.Text = "🎯 HOLD\nAIM LOCK"
+end)
+
+-- ═══════════ HELPERS ═══════════
+local function isAlive(plr)
+    local char = plr.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
+end
+
+local function getRoot(plr)
+    local char = plr.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function sameTeam(plr)
+    if not Config.TeamCheck then return false end
+    return plr.Team ~= nil and plr.Team == LP.Team
+end
+
+-- Cari target terdekat dari mouse dalam FOV
+local function findTarget()
+    local best, bestDist = nil, Config.FOVRadius
+    local mousePos = Vector2.new(Mouse.X, Mouse.Y)
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LP and (not Config.IgnoreDead or isAlive(plr)) and not sameTeam(plr) then
+            local root = getRoot(plr)
+            if root then
+                local screenPos, onScreen = Camera:WorldToScreenPoint(root.Position)
+                if onScreen then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    if dist < bestDist then
+                        bestDist = dist
+                        best = plr
+                    end
+                end
+            end
+        end
+    end
+
+    return best
+end
+
+-- Hitung posisi aim (Auto Height + Divider + Predict)
+local function calculateAimPos(target)
+    local root = getRoot(target)
+    if not root then return nil end
+
+    local pos = root.Position
+
+    -- Auto Height → aim ke Head
+    if Config.AutoHeight then
+        local head = target.Character:FindFirstChild("Head")
+        if head then
+            pos = head.Position
+        end
+    end
+
+    -- Divider adjustment
+    pos = pos + Vector3.new(0, Config.Divider * 0.05, 0)
+
+    -- Aim Prediction
+    if Config.AimPredict then
+        local hum = target.Character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.MoveDirection.Magnitude > 0 then
+            local velocity = hum.MoveDirection * hum.WalkSpeed
+            pos = pos + (velocity * Config.PredictStrength)
+        end
+    end
+
+    return pos
+end
+
+-- ═══════════ MAIN LOOP ═══════════
+RunService.RenderStepped:Connect(function()
+    -- Update FOV circle
+    FOVFrame.Visible = Config.ShowFOV
+    if Config.ShowFOV then
+        local size = Config.FOVRadius * 2
+        FOVFrame.Size = UDim2.new(0, size, 0, size)
+        FOVStroke.Color = Config.FOVColor
+    end
+
+    -- Cek aktivasi aimlock
+    local active = isHolding or UserInputService:IsMouseButtonPressed(Config.LockKey)
+    if not active then return end
+
+    local target = findTarget()
+    if not target then return end
+
+    local aimPos = calculateAimPos(target)
+    if not aimPos then return end
+
+    -- Smooth camera rotation ke target
+    local currentCF = Camera.CFrame
+    local targetCF  = CFrame.new(currentCF.Position, aimPos)
+    Camera.CFrame  = currentCF:Lerp(targetCF, Config.Smoothness)
+end)
+
+-- ═══════════ NOTIFIKASI ═══════════
+local function notify(text, dur)
+    dur = dur or 4
+    local g = Instance.new("ScreenGui", LP:WaitForChild("PlayerGui"))
+    g.ResetOnSpawn = false
+    g.IgnoreGuiInset = true
+
+    local lbl = Instance.new("TextLabel", g)
+    lbl.AnchorPoint = Vector2.new(0.5, 0)
+    lbl.Position = UDim2.new(0.5, 0, 0, 30)
+    lbl.Size = UDim2.new(0, 460, 0, 55)
+    lbl.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    lbl.BackgroundTransparency = 0.15
+    lbl.TextColor3 = Config.FOVColor
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 14
+    lbl.Text = text
+    lbl.Parent = g
+
+    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 10)
+    local s = Instance.new("UIStroke", lbl)
+    s.Color = Config.FOVColor
+    s.Thickness = 1.5
+    s.Parent = lbl
+
+    task.wait(dur)
+    g:Destroy()
+end
+
+notify("✅ Twist of Fate Aimlock Loaded\nHold 🎯 button atau klik kanan untuk lock!")
+
+-- ═══════════ CONSOLE COMMANDS ═══════════
+_G.ToF = {
+    SetDivider    = function(v) Config.Divider = tonumber(v) or 1.0; print("[ToF] Divider =", Config.Divider) end,
+    SetFOV        = function(v) Config.FOVRadius = tonumber(v) or 150; print("[ToF] FOV =", Config.FOVRadius) end,
+    SetSmooth     = function(v) Config.Smoothness = math.clamp(tonumber(v) or 0.3, 0.05, 1); print("[ToF] Smooth =", Config.Smoothness) end,
+    SetPredict    = function(v) Config.PredictStrength = tonumber(v) or 0.15; print("[ToF] Predict =", Config.PredictStrength) end,
+    TogglePredict = function() Config.AimPredict = not Config.AimPredict; print("[ToF] Predict:", Config.AimPredict) end,
+    ToggleAutoH   = function() Config.AutoHeight = not Config.AutoHeight; print("[ToF] AutoHeight:", Config.AutoHeight) end,
+    ToggleFOV     = function() Config.ShowFOV = not Config.ShowFOV; print("[ToF] FOV Circle:", Config.ShowFOV) end,
+    ToggleTeam    = function() Config.TeamCheck = not Config.TeamCheck; print("[ToF] TeamCheck:", Config.TeamCheck) end,
+}
+
+print([[
+╔══════════════════════════════════════╗
+║  🎯 Twist of Fate - Aimlock Loaded   ║
+╠══════════════════════════════════════╣
+║  _G.ToF.SetDivider(1.5)              ║
+║  _G.ToF.SetFOV(200)                  ║
+║  _G.ToF.SetSmooth(0.2)               ║
+║  _G.ToF.TogglePredict()              ║
+║  _G.ToF.ToggleAutoH()                ║
+║  _G.ToF.ToggleFOV()                  ║
+╚══════════════════════════════════════╝
+]])
